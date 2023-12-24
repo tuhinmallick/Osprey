@@ -25,133 +25,127 @@ def show_mask(mask, image, random_color=True, img_trans=0.9, mask_trans=0.5, ret
   mask_image = mask.reshape(h,w,1)*color.reshape(1,1,-1)
 
   image = cv2.addWeighted(image, img_trans, mask_image.astype('uint8'), mask_trans , 0)
-  if return_color:
-    return image, mask_image
-  else:
-    return image
+  return (image, mask_image) if return_color else image
 
 class Osprey():
     def __init__(self, model_path, device='cuda'):
-        disable_torch_init()
-        model_path = os.path.expanduser(model_path)
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_path,
-            model_max_length=2048,
-            padding_side="right",
-            use_fast=True
-        )
-        self.model = OspreyLlamaForCausalLM.from_pretrained(
-                                                model_path,
-                                                torch_dtype=torch.bfloat16,
-                                                ).to(device)
-        self.tokenizer.pad_token = self.tokenizer.unk_token
+      disable_torch_init()
+      model_path = os.path.expanduser(model_path)
+      self.tokenizer = AutoTokenizer.from_pretrained(
+          model_path,
+          model_max_length=2048,
+          padding_side="right",
+          use_fast=True
+      )
+      self.model = OspreyLlamaForCausalLM.from_pretrained(
+                                              model_path,
+                                              torch_dtype=torch.bfloat16,
+                                              ).to(device)
+      self.tokenizer.pad_token = self.tokenizer.unk_token
 
-        self.image_processor = CLIPImageProcessor(do_resize=True, size={"shortest_edge":512}, resample=3,  do_center_crop=True, crop_size={"height": 512, "width": 512},
-                                                    do_rescale=True, rescale_factor=0.00392156862745098, do_normalize=True, image_mean=[0.48145466, 0.4578275, 0.40821073],
-                                                    image_std=[0.26862954, 0.26130258, 0.27577711], do_convert_rgb=True, )
-        
-        spi_tokens = ['<mask>', '<pos>']
-        self.tokenizer.add_tokens(spi_tokens, special_tokens=True)
-        
-        for m in self.model.modules():
-            m.tokenizer = self.tokenizer
+      self.image_processor = CLIPImageProcessor(do_resize=True, size={"shortest_edge":512}, resample=3,  do_center_crop=True, crop_size={"height": 512, "width": 512},
+                                                  do_rescale=True, rescale_factor=0.00392156862745098, do_normalize=True, image_mean=[0.48145466, 0.4578275, 0.40821073],
+                                                  image_std=[0.26862954, 0.26130258, 0.27577711], do_convert_rgb=True, )
 
-        vision_tower = self.model.get_vision_tower()
-        if not vision_tower.is_loaded:
-            vision_tower.load_model()
-        vision_tower.to(dtype=torch.float16, device=device)
+      spi_tokens = ['<mask>', '<pos>']
+      self.tokenizer.add_tokens(spi_tokens, special_tokens=True)
 
-        begin_str = """<image>\n\nThis provides an overview of the picture.\n"""
+      for m in self.model.modules():
+          m.tokenizer = self.tokenizer
 
-        short_question = 'Please give me a short description of <mask><pos>. Using a short phrase.'
+      vision_tower = self.model.get_vision_tower()
+      if not vision_tower.is_loaded:
+          vision_tower.load_model()
+      vision_tower.to(dtype=torch.float16, device=device)
 
-        conv = conv_templates['osprey_v1'].copy()
-        qs = begin_str+short_question
-        conv.append_message(conv.roles[0], qs)
-        conv.append_message(conv.roles[1], None)
-        prompt = conv.get_prompt()
+      begin_str = """<image>\n\nThis provides an overview of the picture.\n"""
 
-        self.input_ids_short = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.model.device)
+      short_question = 'Please give me a short description of <mask><pos>. Using a short phrase.'
 
-        detailed_question = 'Can you give me a detailed description of <mask><pos>?'
-        
-        conv = conv_templates['osprey_v1'].copy()
-        qs = begin_str+detailed_question
-        conv.append_message(conv.roles[0], qs)
-        conv.append_message(conv.roles[1], None)
-        prompt = conv.get_prompt()
+      conv = conv_templates['osprey_v1'].copy()
+      qs = begin_str+short_question
+      conv.append_message(conv.roles[0], qs)
+      conv.append_message(conv.roles[1], None)
+      prompt = conv.get_prompt()
 
-        self.input_ids_detailed = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.model.device)
+      self.input_ids_short = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.model.device)
 
-        self.stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
+      conv = conv_templates['osprey_v1'].copy()
+      qs = f'{begin_str}Can you give me a detailed description of <mask><pos>?'
+      conv.append_message(conv.roles[0], qs)
+      conv.append_message(conv.roles[1], None)
+      prompt = conv.get_prompt()
+
+      self.input_ids_detailed = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.model.device)
+
+      self.stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
 
 
 
     def osprey_predict(self, img, mask, type=None):
-        image = self.image_processor.preprocess(img,
-                                do_center_crop=False,
-                                return_tensors='pt')['pixel_values'][0]
+      image = self.image_processor.preprocess(img,
+                              do_center_crop=False,
+                              return_tensors='pt')['pixel_values'][0]
 
-        image = torch.nn.functional.interpolate(image.unsqueeze(0),
-                                                size=(512, 512),
-                                                mode='bilinear',
-                                                align_corners=False).squeeze(0)
+      image = torch.nn.functional.interpolate(image.unsqueeze(0),
+                                              size=(512, 512),
+                                              mode='bilinear',
+                                              align_corners=False).squeeze(0)
 
-        masks = torch.Tensor(mask).unsqueeze(0).to(self.model.device)
+      masks = torch.Tensor(mask).unsqueeze(0).to(self.model.device)
 
-        
-        if type == 'short description':
-           input_ids = self.input_ids_short
-        else:
-           input_ids = self.input_ids_detailed
 
-        # self.model.model.tokenizer = self.tokenizer
+      if type == 'short description':
+         input_ids = self.input_ids_short
+      else:
+         input_ids = self.input_ids_detailed
 
-        with torch.inference_mode():
+      # self.model.model.tokenizer = self.tokenizer
 
-            self.model.orig_forward = self.model.forward
-            self.model.forward = partial(self.model.orig_forward,
-                                        img_metas=[None],
-                                        masks=[masks.half()])
-            
-            output_ids = self.model.generate(
-                input_ids,
-                images=image.unsqueeze(0).half().to(self.model.device),
-                do_sample=True,
-                temperature=0.2,
-                max_new_tokens=1024,
-                use_cache=True,
-                num_beams=1,
-                # stopping_criteria=[stopping_criteria]
-                )
+      with torch.inference_mode():
 
-            self.model.forward = self.model.orig_forward
+          self.model.orig_forward = self.model.forward
+          self.model.forward = partial(self.model.orig_forward,
+                                      img_metas=[None],
+                                      masks=[masks.half()])
 
-        input_token_len = input_ids.shape[1]
-        n_diff_input_output = (
-            input_ids != output_ids[:, :input_token_len]).sum().item()
-        if n_diff_input_output > 0:
-            print(
-                f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
-        outputs = self.tokenizer.batch_decode(output_ids[:, input_token_len:],
-                                            skip_special_tokens=True)[0]
-    
-        outputs = outputs.strip()
-        if outputs.endswith(self.stop_str):
-            outputs = outputs[:-len(self.stop_str)]
-        outputs = outputs.strip()
-        if ':' in outputs:
-            outputs = outputs.split(':')[1]
+          output_ids = self.model.generate(
+              input_ids,
+              images=image.unsqueeze(0).half().to(self.model.device),
+              do_sample=True,
+              temperature=0.2,
+              max_new_tokens=1024,
+              use_cache=True,
+              num_beams=1,
+              # stopping_criteria=[stopping_criteria]
+              )
 
-        outputs_list = outputs.split('.')
-        outputs_list_final = []
-        outputs_str = ''
-        for output in outputs_list:
-            if output not in outputs_list_final:
-                if output=='':
-                    continue
-                outputs_list_final.append(output)
-                outputs_str+=output+'.'
-            else:
-                break
-        return outputs_str
+          self.model.forward = self.model.orig_forward
+
+      input_token_len = input_ids.shape[1]
+      n_diff_input_output = (
+          input_ids != output_ids[:, :input_token_len]).sum().item()
+      if n_diff_input_output > 0:
+          print(
+              f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
+      outputs = self.tokenizer.batch_decode(output_ids[:, input_token_len:],
+                                          skip_special_tokens=True)[0]
+
+      outputs = outputs.strip()
+      if outputs.endswith(self.stop_str):
+          outputs = outputs[:-len(self.stop_str)]
+      outputs = outputs.strip()
+      if ':' in outputs:
+          outputs = outputs.split(':')[1]
+
+      outputs_list = outputs.split('.')
+      outputs_list_final = []
+      outputs_str = ''
+      for output in outputs_list:
+        if output in outputs_list_final:
+          break
+        if output=='':
+            continue
+        outputs_list_final.append(output)
+        outputs_str += f'{output}.'
+      return outputs_str

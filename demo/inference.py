@@ -15,16 +15,12 @@ def get_sam_predictor(model_type='vit_b', device='cuda'):
   sam = sam_model_registry[model_type](checkpoint=models[model_type])
   sam = sam.to(device)
 
-  predictor = SamPredictor(sam)
-
-  return predictor
+  return SamPredictor(sam)
 
 def get_mask_generator(model_type='vit_b', device='cuda'):
   sam = sam_model_registry[model_type](checkpoint=models[model_type])
   sam = sam.to(device)
-  mask_generator = SamAutomaticMaskGenerator(
-      model=sam)
-  return mask_generator
+  return SamAutomaticMaskGenerator(model=sam)
 
 def run_inference(predictor: SamPredictor, input_x, selected_points,
                   multi_object: bool = False):

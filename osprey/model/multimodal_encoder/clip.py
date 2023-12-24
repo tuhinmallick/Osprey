@@ -21,14 +21,13 @@ class CLIP(nn.Module):
             param.requires_grad = False
 
     def extract_features(self, x):
-        out = {}
         x = x.to(self.visual.trunk.stem.state_dict()['1.bias'].dtype)
         x = self.visual.trunk.stem(x)
-        out['stem'] = x.contiguous() 
+        out = {'stem': x.contiguous()}
         for i in range(4):
             x = self.visual.trunk.stages[i](x)
             out[f'res{i+2}'] = x.contiguous() 
-        
+
         x = self.visual.trunk.norm_pre(x)
         out['clip_vis_dense'] = x.contiguous()
         return out

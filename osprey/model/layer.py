@@ -96,7 +96,7 @@ class MaskPooling(nn.Module):
 
     def forward(self, x, mask):
 
-        if not x.shape[-2:] == mask.shape[-2:]:
+        if x.shape[-2:] != mask.shape[-2:]:
             # reshape mask to x
             mask = F.interpolate(mask, size=x.shape[-2:], mode='bilinear', align_corners=False)
 
@@ -105,10 +105,9 @@ class MaskPooling(nn.Module):
         mask = (mask > 0).to(mask.dtype)
         denorm = mask.sum(dim=(-1, -2), keepdim=True) + 1e-8
 
-        mask_pooled_x = torch.einsum(
+        return torch.einsum(
             "bchw,bqhw->bqc",
             x,
             mask / denorm,
         )
-        return mask_pooled_x
 
