@@ -27,13 +27,12 @@ def expand2square(pil_img, background_color):
 def process_images(images, image_processor, model_cfg):
     image_aspect_ratio = getattr(model_cfg, "image_aspect_ratio", None)
     new_images = []
-    if image_aspect_ratio == 'pad':
-        for image in images:
-            image = expand2square(image, tuple(int(x*255) for x in image_processor.image_mean))
-            image = image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-            new_images.append(image)
-    else:
+    if image_aspect_ratio != 'pad':
         return image_processor(images, return_tensors='pt')['pixel_values']
+    for image in images:
+        image = expand2square(image, tuple(int(x*255) for x in image_processor.image_mean))
+        image = image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+        new_images.append(image)
     if all(x.shape == new_images[0].shape for x in new_images):
         new_images = torch.stack(new_images, dim=0)
     return new_images
@@ -47,7 +46,11 @@ def tokenizer_image_token(prompt, tokenizer, image_token_index=IMAGE_TOKEN_INDEX
 
     input_ids = []
     offset = 0
-    if len(prompt_chunks) > 0 and len(prompt_chunks[0]) > 0 and prompt_chunks[0][0] == tokenizer.bos_token_id:
+    if (
+        prompt_chunks
+        and len(prompt_chunks[0]) > 0
+        and prompt_chunks[0][0] == tokenizer.bos_token_id
+    ):
         offset = 1
         input_ids.append(prompt_chunks[0][0])
 
@@ -65,7 +68,7 @@ def get_model_name_from_path(model_path):
     model_path = model_path.strip("/")
     model_paths = model_path.split("/")
     if model_paths[-1].startswith('checkpoint-'):
-        return model_paths[-2] + "_" + model_paths[-1]
+        return f"{model_paths[-2]}_{model_paths[-1]}"
     else:
         return model_paths[-1]
 
@@ -89,7 +92,4 @@ class KeywordsStoppingCriteria(StoppingCriteria):
             if output_ids[0, -keyword_id.shape[0]:] == keyword_id:
                 return True
         outputs = self.tokenizer.batch_decode(output_ids[:, -offset:], skip_special_tokens=True)[0]
-        for keyword in self.keywords:
-            if keyword in outputs:
-                return True
-        return False
+        return any(keyword in outputs for keyword in self.keywords)

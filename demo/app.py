@@ -40,7 +40,7 @@ def gen_colored_masks(
         color = torch.rand((mask_sum, 1, 1, 3)).to(device)
     else:
         color = torch.ones((mask_sum, 1, 1, 3)).to(device) * torch.tensor(
-            [30 / 255, 144 / 255, 255 / 255]
+            [30 / 255, 144 / 255, 1]
         ).to(device)
     transparency = torch.ones((mask_sum, 1, 1, 1)).to(device) * 0.6
     visual = torch.cat([color, transparency], dim=-1)
@@ -82,20 +82,16 @@ class ImageSketcher(gr.Image):
         return x
 
 def mask_foreground(mask, trans=0.6, random_color=True):
-  if random_color:
-    color = np.concatenate([np.random.random(3)*255,np.array([trans*255])], axis=0)
-  else:
-    color = np.array([30, 144, 255, trans*255])
-  h,w = mask.shape[-2:]
-  mask_image = mask.reshape(h,w,1)*color.reshape(1,1,-1)
-
-  return mask_image
+    if random_color:
+      color = np.concatenate([np.random.random(3)*255,np.array([trans*255])], axis=0)
+    else:
+      color = np.array([30, 144, 255, trans*255])
+    h,w = mask.shape[-2:]
+    return mask.reshape(h,w,1)*color.reshape(1,1,-1)
 
 def mask_background(mask, trans=0.5):
-  h,w = mask.shape[-2:]
-  mask_image = (1 - mask.reshape(h,w,1)) * np.array([0,0,0,trans*255])
-
-  return mask_image
+    h,w = mask.shape[-2:]
+    return (1 - mask.reshape(h,w,1)) * np.array([0,0,0,trans*255])
 
 def img_add_masks(img_, colored_mask, mask, linewidth=2):
   if type(img_) is np.ndarray:
@@ -137,43 +133,39 @@ def img_select_point(original_img: np.ndarray,
   return img, res, masks[0][0]
 
 def sam_everything(original_img):
-  if original_img is None:
-    raise gr.Error("Please upload an image first!")
-  image = Image.fromarray(original_img, mode='RGB')
-  h,w = original_img.shape[:2]
-  masks = mask_generator.generate(original_img)
-  mask_list = []
-  for i, mask in enumerate(masks):
-    mask_list.append(mask['segmentation'])
+    if original_img is None:
+      raise gr.Error("Please upload an image first!")
+    image = Image.fromarray(original_img, mode='RGB')
+    h,w = original_img.shape[:2]
+    masks = mask_generator.generate(original_img)
+    mask_list = [mask['segmentation'] for mask in masks]
+    mask_np = np.array(mask_list)
 
-  mask_np = np.array(mask_list)
+    mask_torch = torch.from_numpy(mask_np)
+    inner_mask, order = gen_colored_masks(
+        mask_torch,
+        random_color=True,
+    )
 
-  mask_torch = torch.from_numpy(mask_np)
-  inner_mask, order = gen_colored_masks(
-      mask_torch,
-      random_color=True,
-  )
+    contour_all = []
+    temp = np.zeros((h, w, 1))
+    for mask in mask_np:
+        annotation = mask.astype(np.uint8)
+        contours, _ = cv2.findContours(annotation, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        contour_all.extend(iter(contours))
+    cv2.drawContours(temp, contour_all, -1, (255, 255, 255), 1)
+    color = np.array([0 / 255, 0 / 255, 0 / 255, 1])
+    contour_mask = temp / 255 * color.reshape(1, 1, -1)
 
-  contour_all = []
-  temp = np.zeros((h, w, 1))
-  for i, mask in enumerate(mask_np):
-      annotation = mask.astype(np.uint8)
-      contours, _ = cv2.findContours(annotation, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-      for contour in contours:
-          contour_all.append(contour)
-  cv2.drawContours(temp, contour_all, -1, (255, 255, 255), 1)
-  color = np.array([0 / 255, 0 / 255, 0 / 255, 1])
-  contour_mask = temp / 255 * color.reshape(1, 1, -1)
+    image = image.convert('RGBA')
+    overlay_inner = Image.fromarray((inner_mask * 255).astype(np.uint8), 'RGBA')
+    image.paste(overlay_inner, (0, 0), overlay_inner)
 
-  image = image.convert('RGBA')
-  overlay_inner = Image.fromarray((inner_mask * 255).astype(np.uint8), 'RGBA')
-  image.paste(overlay_inner, (0, 0), overlay_inner)
+    overlay_contour = Image.fromarray((contour_mask * 255).astype(np.uint8), 'RGBA')
+    image.paste(overlay_contour, (0, 0), overlay_contour)
 
-  overlay_contour = Image.fromarray((contour_mask * 255).astype(np.uint8), 'RGBA')
-  image.paste(overlay_contour, (0, 0), overlay_contour)
 
-  
-  return image, mask_list, image.copy(), order, ''
+    return image, mask_list, image.copy(), order, ''
 
 def init_image(img):
   if isinstance(img, dict):
@@ -194,17 +186,18 @@ def init_image(img):
 
 
 def mask_select_point(all_masks, output_mask_2_raw, mask_order, evt: gr.SelectData):
-  h, w = output_mask_2_raw.height, output_mask_2_raw.width
-  pointed_mask = None
-  for i in range(len(mask_order)):
-    idx = mask_order[i]
-    msk = all_masks[idx]
-    if msk[evt.index[1], evt.index[0]] == 1:
-      pointed_mask = msk.copy()
-      break
-  
-  if pointed_mask is not None:
-    contours, hierarchy = cv2.findContours(pointed_mask.astype("uint8"),cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE) 
+    h, w = output_mask_2_raw.height, output_mask_2_raw.width
+    pointed_mask = None
+    for i in range(len(mask_order)):
+      idx = mask_order[i]
+      msk = all_masks[idx]
+      if msk[evt.index[1], evt.index[0]] == 1:
+        pointed_mask = msk.copy()
+        break
+
+    if pointed_mask is None:
+        return output_mask_2_raw, None
+    contours, hierarchy = cv2.findContours(pointed_mask.astype("uint8"),cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
     ret = output_mask_2_raw.copy()
 
     temp = np.zeros((h, w, 1))
@@ -220,18 +213,15 @@ def mask_select_point(all_masks, output_mask_2_raw, mask_order, evt: gr.SelectDa
 
     overlay_contour = Image.fromarray(contour_mask.astype(np.uint8), 'RGBA')
     ret.paste(overlay_contour, (0, 0), overlay_contour)
-  
-    
+
+
     return ret, pointed_mask
-  else:
-    return output_mask_2_raw, None
   
 def osprey_predict(img, pointed_mask, select):
-  if pointed_mask is not None:
-    caption = osprey_.osprey_predict(img, pointed_mask, select)
-    return caption
-  else:
-    return "⚠️ No mask selected."
+    if pointed_mask is not None:
+        return osprey_.osprey_predict(img, pointed_mask, select)
+    else:
+        return "⚠️ No mask selected."
   
 def gen_box_seg(inp):
   if inp is None:
